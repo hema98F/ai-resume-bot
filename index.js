@@ -36,9 +36,16 @@ async function getEmbedding(text) {
     }),
   });
 
-  console.log("⬅️ Got response from API");
   const data = await response.json();
-  return data.data[0].embedding; // array of 1536 numbers
+  console.log("⬅️ Embedding API response:", JSON.stringify(data).substring(0, 200));
+
+  // Guard against unexpected response
+  if (!data.data || !data.data[0]) {
+    console.error("❌ Unexpected embedding response:", JSON.stringify(data));
+    throw new Error(`Embedding API error: ${JSON.stringify(data)}`);
+  }
+
+  return data.data[0].embedding;
 }
 
 // ─── HELPER: Split text into chunks ───────────────────────────────────────────
