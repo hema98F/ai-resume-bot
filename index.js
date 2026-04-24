@@ -24,7 +24,6 @@ const upload = multer({ storage: multer.memoryStorage() });
 // ─── HELPER: Get embedding for any text ───────────────────────────────────────
 async function getEmbedding(text) {
   console.log("➡️ Calling embedding API...");
-
   const response = await fetch("https://openrouter.ai/api/v1/embeddings", {
     method: "POST",
     headers: {
@@ -37,15 +36,9 @@ async function getEmbedding(text) {
     }),
   });
 
+  console.log("⬅️ Got response from API");
   const data = await response.json();
-
-  console.log("FULL EMBEDDING RESPONSE:", JSON.stringify(data, null, 2));
-
-  if (!data.data || !data.data[0]) {
-    throw new Error("Embedding failed — check API key or model");
-  }
-
-  return data.data[0].embedding;
+  return data.data[0].embedding; // array of 1536 numbers
 }
 
 // ─── HELPER: Split text into chunks ───────────────────────────────────────────
@@ -227,7 +220,7 @@ Answer directly and concisely based on the context above.`;
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          model: "openai/gpt-4o-mini",
+          model: "openai/gpt-3.5-turbo",
           messages: [{ role: "user", content: prompt }],
         }),
       },
@@ -236,18 +229,6 @@ Answer directly and concisely based on the context above.`;
     console.log("📥 LLM responded");
 
     const data = await response.json();
-
-    console.log("FULL LLM RESPONSE:", JSON.stringify(data, null, 2));
-
-    //  Prevent crash if API fails
-    if (!data.choices || !data.choices[0]) {
-      console.error("LLM ERROR RESPONSE:", data);
-      return res.status(500).json({
-        error: "LLM failed",
-        details: data,
-      });
-    }
-
     const answer = data.choices[0].message.content;
 
     res.json({
@@ -257,7 +238,7 @@ Answer directly and concisely based on the context above.`;
       sources: relevantChunks.map((c) => ({
         source: c.source,
         score: c.score?.toFixed(3),
-        preview: c.text ? c.text.substring(0, 100) + "..." : "",
+        preview: c.text.substring(0, 100) + "...",
       })),
     });
   } catch (error) {
@@ -290,7 +271,7 @@ app.post("/extract-profile", async (req, res) => {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          model: "openai/gpt-4o-mini",
+          model: "openai/gpt-3.5-turbo",
           messages: [
             {
               role: "system",
@@ -322,17 +303,6 @@ No explanation. No markdown. No code blocks. Just raw JSON.`,
     );
 
     const data = await response.json();
-
-    console.log("FULL PROFILE AI RESPONSE:", JSON.stringify(data, null, 2));
-
-    if (!data.choices || !data.choices[0]) {
-      console.error("PROFILE AI ERROR:", data);
-      return res.status(500).json({
-        error: "Profile extraction failed",
-        details: data,
-      });
-    }
-
     const rawText = data.choices[0].message.content;
 
     console.log("Raw AI response:", rawText);
