@@ -209,17 +209,23 @@ app.post("/ask", async (req, res) => {
     // Step 3 — build prompt with chunks as context
     const context = relevantChunks.map((c) => c.text).join("\n\n---\n\n");
 
-    const prompt = `You are a resume assistant. You are given chunks of text extracted from a resume.
-Answer the question using the information in the context below.
-The context may have formatting issues or line breaks — ignore them and extract the meaning.
-If you truly cannot find the answer, say "I don't find that information in the document."
+    const prompt = `You are a resume assistant. Answer ONLY the specific question asked.
+Be concise and direct. Do not dump unrelated information.
+The context is extracted from a resume PDF and may have formatting issues — ignore them.
+If the answer is not in the context, say "I don't find that information in the document."
 
 CONTEXT:
 ${context}
 
 QUESTION: ${question}
 
-Answer directly and concisely based on the context above.`;
+Rules:
+- Answer ONLY what was asked
+- If asked about skills, list ONLY skills
+- If asked about name, say ONLY the name
+- If asked about job, describe ONLY job/experience
+- Keep answer under 3 sentences unless listing items
+- Never repeat the context back verbatim`;
 
     console.log("🧠 Calling LLM...");
 
