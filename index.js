@@ -35,7 +35,8 @@ async function getEmbedding(text) {
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      model: "openai/text-embedding-ada-002",
+      // model: "openai/text-embedding-ada-002",
+      model: "text-embedding-3-small",
       input: text,
     }),
   });
@@ -105,7 +106,7 @@ app.post("/upload", upload.single("pdf"), async (req, res) => {
 
     // Step 4 — embed
     const embeddings = await Promise.all(
-      chunks.map((chunk) => getEmbedding(chunk))
+      chunks.map((chunk) => getEmbedding(chunk)),
     );
 
     // Step 5 — save
@@ -116,8 +117,8 @@ app.post("/upload", upload.single("pdf"), async (req, res) => {
           embedding,
           source: filename,
           chunkIndex: i,
-        })
-      )
+        }),
+      ),
     );
 
     console.log("All chunks saved");
@@ -127,7 +128,6 @@ app.post("/upload", upload.single("pdf"), async (req, res) => {
       filename,
       totalChunks: chunks.length,
     });
-
   } catch (error) {
     console.error("Upload error:", error);
     res.status(500).json({ error: error.message });
@@ -226,7 +226,21 @@ app.post("/ask", async (req, res) => {
   if (!question) {
     return res.status(400).json({ error: "Please send a question" });
   }
+const lowerQ = question.toLowerCase();
 
+if (lowerQ.includes("name")) {
+  const chunks = await Chunk.find({});
+  const fullText = chunks.map(c => c.text).join(" ");
+
+  const match = fullText.match(/[A-Z]{2,}(?:\s[A-Z]{2,})+/);
+  
+  if (match) {
+    return res.json({
+      question,
+      answer: match[0]
+    });
+  }
+}
   try {
     // Step 1 — embed the question
     console.log("Embedding question...");
@@ -241,7 +255,7 @@ app.post("/ask", async (req, res) => {
           path: "embedding",
           queryVector: questionEmbedding,
           numCandidates: 50,
-          limit: 3, // top 3 most relevant chunks
+          limit: 5, // top most relevant chunks
         },
       },
       {
@@ -371,22 +385,35 @@ No explanation. No markdown. No code blocks. Just raw JSON.`,
             },
             {
               role: "user",
-              content: `Extract the following from this resume text and return as JSON:
-              {
-              "name": "full name",
-              "title": "job title",
-              "email": "email address",
-              "phone": "phone number",
-              "summary": "professional summary",
-              "skills": ["skill1", "skill2"],
-              "projects": [{"name": "project name", "description": "what it does"}],
-              "education": "degree and insitution"
-              }
-              
-              RESUME TEXT:
-              ${fullText}
-              
-              Return ONLY the JSON object. Nothing else.`,
+              content: `Extract structured data from this resume.
+
+Return ONLY valid JSON in this exact format:
+
+{
+  "name": "",
+  "title": "",
+  "email": "",
+  "phone": "",
+  "summary": "",
+  "skills": [],
+  "projects": [
+    {
+      "name": "",
+      "description": ""
+    }
+  ],
+  "education": ""
+}
+
+Rules:
+- MUST be valid JSON
+- Always include all keys
+- skills must be an array of strings
+- projects must be array of objects
+- Do NOT skip brackets or quotes
+
+RESUME TEXT:
+${fullText}`,
             },
           ],
         }),
