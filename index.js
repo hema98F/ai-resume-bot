@@ -44,7 +44,7 @@ async function getEmbedding(text) {
   const data = await response.json();
   console.log(
     "Embedding API response:",
-    JSON.stringify(data).substring(0, 200),
+    JSON.stringify(data).substring(0, 100),
   );
 
   // Guard against unexpected response
@@ -90,16 +90,15 @@ app.post("/upload", upload.single("pdf"), async (req, res) => {
 
     // Clean text
     fullText = fullText
-      .replace(/\b([A-Za-z])\s(?=[A-Za-z]\s|[A-Za-z]\b)/g, "$1")
-      .replace(/  +/g, " ")
-      .replace(/\n{3,}/g, "\n\n")
-      .replace(/[^\x20-\x7E\n]/g, " ")
+      .replace(/([a-z])([A-Z])/g, "$1 $2") // fix merged words
+      .replace(/\s+/g, " ") // normalize spaces
+      .replace(/\n+/g, "\n") // normalize newlines
       .trim();
 
     console.log("Extracted:", fullText.length);
 
     // Step 2 — chunk
-    const chunks = splitIntoChunks(fullText, 200);
+    const chunks = splitIntoChunks(fullText, 100);
 
     // Step 3 — clear old data
     await Chunk.deleteMany({});
@@ -223,23 +222,25 @@ app.post("/upload", upload.single("pdf"), async (req, res) => {
 app.post("/ask", async (req, res) => {
   const { question } = req.body;
 
-if (!question) {
-  return res.status(400).json({ error: "Please send a question" });
-}
+  if (!question) {
+    return res.status(400).json({ error: "Please send a question" });
+  }
 
-// STEP 1: ROUTER
-const routerResponse = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-  method: "POST",
-  headers: {
-    Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
-    "Content-Type": "application/json",
-  },
-  body: JSON.stringify({
-    model: "openai/gpt-3.5-turbo",
-    messages: [
-      {
-        role: "user",
-        content: `
+  // STEP 1: ROUTER
+  const routerResponse = await fetch(
+    "https://openrouter.ai/api/v1/chat/completions",
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "openai/gpt-3.5-turbo",
+        messages: [
+          {
+            role: "user",
+            content: `
 Classify this question into ONE of these:
 - profile (name, skills, education, contact, projects)
 - rag (summary, explanation, experience)
@@ -247,32 +248,35 @@ Classify this question into ONE of these:
 Return ONLY one word.
 
 Question: ${question}
-        `
-      }
-    ]
-  })
-});
-
-const routerData = await routerResponse.json();
-const route = routerData.choices[0].message.content.trim();
-
-// STEP 2: HANDLE PROFILE QUESTIONS
-if (route === "profile") {
-  const chunks = await Chunk.find({});
-  const fullText = chunks.map(c => c.text).join("\n");
-
-  const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
-      "Content-Type": "application/json",
+        `,
+          },
+        ],
+      }),
     },
-    body: JSON.stringify({
-      model: "openai/gpt-3.5-turbo",
-      messages: [
-        {
-          role: "user",
-          content: `
+  );
+
+  const routerData = await routerResponse.json();
+  const route = routerData.choices[0].message.content.trim();
+
+  // STEP 2: HANDLE PROFILE QUESTIONS
+  if (route === "profile") {
+    const chunks = await Chunk.find({});
+    const fullText = chunks.map((c) => c.text).join("\n");
+
+    const response = await fetch(
+      "https://openrouter.ai/api/v1/chat/completions",
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: "openai/gpt-3.5-turbo",
+          messages: [
+            {
+              role: "user",
+              content: `
 Answer this question STRICTLY from the resume.
 
 Question: ${question}
@@ -284,19 +288,20 @@ Rules:
 - Be direct
 - If answer exists → give it
 - If not → say "Not mentioned"
-`
-        }
-      ]
-    })
-  });
+`,
+            },
+          ],
+        }),
+      },
+    );
 
-  const data = await response.json();
+    const data = await response.json();
 
-  return res.json({
-    question,
-    answer: data.choices[0].message.content
-  });
-}
+    return res.json({
+      question,
+      answer: data.choices[0].message.content,
+    });
+  }
 
   try {
     // Step 1 — embed the question
@@ -324,6 +329,8 @@ Rules:
       },
     ]);
 
+    const filteredChunks = relevantChunks.filter(c => c.score > 0.7);
+
     console.log(`Found ${relevantChunks.length} relevant chunks`);
     relevantChunks.forEach((c, i) => {
       console.log(`Chunk ${i + 1} score: ${c.score?.toFixed(3)}`);
@@ -350,12 +357,20 @@ Rules:
       console.log(`\nCHUNK ${i + 1} TEXT:\n${c.text}\n`);
     });
     // Step 3 — build prompt with chunks as context
-    const context = relevantChunks.map((c) => c.text).join("\n\n---\n\n");
+    const context = filteredChunks.length > 0
+  ? filteredChunks.map(c => c.text).join("\n\n")
+  : relevantChunks.map(c => c.text).join("\n\n");
 
-    const prompt = `You are a resume assistant. Answer ONLY the specific question asked.
-Be concise and direct. Do not dump unrelated information.
-The context is extracted from a resume PDF and may have formatting issues — ignore them.
-If the answer is not in the context, say "I don't find that information in the document."
+    const prompt = `You are a resume assistant.
+
+The context may contain formatting issues or merged words.
+Carefully interpret the meaning.
+
+Answer ONLY if clearly supported by context.
+Do NOT guess.
+
+If the answer is not in the context, say:
+"I don't find that information in the document."
 
 CONTEXT:
 ${context}
@@ -364,11 +379,8 @@ QUESTION: ${question}
 
 Rules:
 - Answer ONLY what was asked
-- If asked about skills, list ONLY skills
-- If asked about name, say ONLY the name
-- If asked about job, describe ONLY job/experience
-- Keep answer under 3 sentences unless listing items
-- Never repeat the context back verbatim`;
+- Be concise
+- Do not include unrelated information`;
 
     console.log("Calling LLM...");
 
