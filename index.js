@@ -195,6 +195,11 @@ Do not summarize or skip anything.`,
 
     console.log("All chunks saved!");
 
+    // Wait for Atlas Vector Search index to sync
+    console.log("Waiting for index to sync...");
+    await new Promise((resolve) => setTimeout(resolve, 15000)); // 15 second wait
+    console.log("Index synced — ready!");
+
     res.json({
       message: "PDF processed successfully with AI Vision!",
       filename,
