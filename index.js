@@ -421,7 +421,7 @@ Rules:
 app.post("/extract-profile", async (req, res) => {
   try {
     // Load all chunks from MongoDB for this resume
-    const chunks = await Chunk.find({ source: req.body.filename });
+    const chunks = await Chunk.find({});
 
     if (chunks.length === 0) {
       return res.status(404).json({ error: "No resume found. Upload first." });
