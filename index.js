@@ -226,20 +226,35 @@ app.post("/ask", async (req, res) => {
   if (!question) {
     return res.status(400).json({ error: "Please send a question" });
   }
-const lowerQ = question.toLowerCase();
-
 if (lowerQ.includes("name")) {
   const chunks = await Chunk.find({});
-  const fullText = chunks.map(c => c.text).join(" ");
+  const fullText = chunks.map(c => c.text).join("\n");
 
-  const match = fullText.match(/[A-Z]{2,}(?:\s[A-Z]{2,})+/);
-  
-  if (match) {
-    return res.json({
-      question,
-      answer: match[0]
-    });
-  }
+  const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: "openai/gpt-3.5-turbo",
+      messages: [
+        {
+          role: "user",
+          content: `Extract ONLY the full name from this resume text.
+Return only the name, nothing else.
+
+TEXT:
+${fullText}`
+        }
+      ]
+    })
+  });
+
+  const data = await response.json();
+  const name = data.choices[0].message.content.trim();
+
+  return res.json({ question, answer: name });
 }
   try {
     // Step 1 — embed the question
