@@ -7,6 +7,7 @@ console.log(typeof pdf);
 const fetch = require("node-fetch");
 const cors = require("cors");
 const Chunk = require("./models/Chunk");
+const { fromBuffer } = require('pdf2pic');
 
 console.log("API KEY:", process.env.OPENROUTER_API_KEY ? "EXISTS" : "MISSING");
 console.log("MONGO URI:", process.env.MONGODB_URI ? "EXISTS" : "MISSING");
@@ -78,89 +79,217 @@ function splitIntoChunks(text, chunkSize = 200) {
 // ROUTE 1: Upload PDF
 app.post("/upload", upload.single("pdf"), async (req, res) => {
   try {
-    console.log("PDF received, extracting text...");
+    console.log("PDF received, converting to images...");
 
-    // Step 1 — extract text from PDF
+    const filename = req.file.originalname;
+
+    // Delete ALL old chunks
+    await Chunk.deleteMany({});
+
+    // Step 1 — convert PDF pages to base64 images
+    const converter = fromBuffer(req.file.buffer, {
+      density: 150,           // DPI — higher = better quality but slower
+      format: "png",
+      width: 1200,
+      height: 1600,
+    });
+
+    // Get page count first
     const pdfData = await pdf(req.file.buffer);
-    let fullText = pdfData.text;
+    const pageCount = pdfData.numpages;
+    console.log(`PDF has ${pageCount} pages`);
 
-    // Clean up broken text — fix spaced characters like "S k i l l s"
-    fullText = fullText
-      // Fix spaced letters: "S k i l l s" → "Skills"
-      .replace(/\b([A-Za-z])\s(?=[A-Za-z]\s|[A-Za-z]\b)/g, "$1")
-      // Fix multiple spaces → single space
-      .replace(/  +/g, " ")
-      // Fix multiple newlines → double newline
-      .replace(/\n{3,}/g, "\n\n")
-      // Remove weird special characters
-      .replace(/[^\x20-\x7E\n]/g, " ")
-      .trim();
+    // Convert each page to image
+    const pageTexts = [];
 
-    console.log("CLEANED TEXT:", fullText.substring(0, 500));
+    for (let page = 1; page <= pageCount; page++) {
+      console.log(`Converting page ${page}/${pageCount} to image...`);
 
-    console.log(`Extracted ${fullText.length} characters`);
-    console.log("FULL TEXT:", fullText);
+      const pageImage = await converter(page, { responseType: "base64" });
+      const base64Image = pageImage.base64;
 
-    // Step 2 — split into chunks
+      console.log(`Sending page ${page} to AI Vision...`);
+
+      // Send image to AI Vision — GPT-4o can see images
+      const visionResponse = await fetch(
+        "https://openrouter.ai/api/v1/chat/completions",
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            model: "openai/gpt-4o",   // Vision model
+            messages: [
+              {
+                role: "user",
+                content: [
+                  {
+                    type: "image_url",
+                    image_url: {
+                      url: `data:image/png;base64,${base64Image}`,
+                    },
+                  },
+                  {
+                    type: "text",
+                    text: `Extract ALL text from this resume page exactly as it appears.
+Include names, contact info, skills, experience, education, everything.
+Preserve the structure but write it as plain text.
+Do not summarize or skip anything.`,
+                  },
+                ],
+              },
+            ],
+            max_tokens: 2000,
+          }),
+        }
+      );
+
+      const visionData = await visionResponse.json();
+
+      if (!visionData.choices?.[0]?.message?.content) {
+        console.error("Vision API error:", JSON.stringify(visionData));
+        throw new Error("Vision API failed: " + JSON.stringify(visionData));
+      }
+
+      const pageText = visionData.choices[0].message.content;
+      console.log(`Page ${page} extracted — ${pageText.length} characters`);
+      console.log("EXTRACTED TEXT:", pageText.substring(0, 300));
+
+      pageTexts.push(pageText);
+    }
+
+    // Combine all pages
+    const fullText = pageTexts.join("\n\n--- PAGE BREAK ---\n\n");
+    console.log(`Total extracted: ${fullText.length} characters`);
+
+    // Step 2 — chunk the text
     const chunks = splitIntoChunks(fullText, 200);
     console.log(`Split into ${chunks.length} chunks`);
 
-    // Step 3 — embed each chunk and save to MongoDB
-    const filename = req.file.originalname;
-
-    // Delete old chunks for this file first
-    await Chunk.deleteMany({});
-
-    // for (let i = 0; i < chunks.length; i++) {
-    //   console.log(`Embedding chunk ${i + 1}/${chunks.length}...`);
-
-    //   const embedding = await getEmbedding(chunks[i]);
-
-    //   console.log(" Saving to MongoDB...");
-
-    //   await Chunk.create({
-    //     text: chunks[i],
-    //     embedding,
-    //     source: filename,
-    //     chunkIndex: i,
-    //   });
-
-    //   console.log("Saved to MongoDB");
-    // }
+    // Step 3 — embed and save
     console.log("Running embeddings in parallel...");
 
     const embeddings = await Promise.all(
       chunks.map((chunk, i) => {
         console.log(`Embedding chunk ${i + 1}/${chunks.length}`);
         return getEmbedding(chunk);
-      }),
+      })
     );
 
     console.log("Saving all chunks to MongoDB...");
 
     await Promise.all(
-      embeddings.map((embedding, i) => {
-        return Chunk.create({
+      embeddings.map((embedding, i) =>
+        Chunk.create({
           text: chunks[i],
           embedding,
           source: filename,
           chunkIndex: i,
-        });
-      }),
+        })
+      )
     );
 
-    console.log("All chunks saved");
+    console.log("All chunks saved!");
 
     res.json({
-      message: "PDF processed successfully!",
+      message: "PDF processed successfully with AI Vision!",
       filename,
       totalChunks: chunks.length,
+      pages: pageCount,
     });
+
   } catch (error) {
     console.error("Upload error:", error);
     res.status(500).json({ error: error.message });
   }
 });
+// app.post("/upload", upload.single("pdf"), async (req, res) => {
+//   try {
+//     console.log("PDF received, extracting text...");
+
+//     // Step 1 — extract text from PDF
+//     const pdfData = await pdf(req.file.buffer);
+//     let fullText = pdfData.text;
+
+//     // Clean up broken text — fix spaced characters like "S k i l l s"
+//     fullText = fullText
+//       // Fix spaced letters: "S k i l l s" → "Skills"
+//       .replace(/\b([A-Za-z])\s(?=[A-Za-z]\s|[A-Za-z]\b)/g, "$1")
+//       // Fix multiple spaces → single space
+//       .replace(/  +/g, " ")
+//       // Fix multiple newlines → double newline
+//       .replace(/\n{3,}/g, "\n\n")
+//       // Remove weird special characters
+//       .replace(/[^\x20-\x7E\n]/g, " ")
+//       .trim();
+
+//     console.log("CLEANED TEXT:", fullText.substring(0, 500));
+
+//     console.log(`Extracted ${fullText.length} characters`);
+//     console.log("FULL TEXT:", fullText);
+
+//     // Step 2 — split into chunks
+//     const chunks = splitIntoChunks(fullText, 200);
+//     console.log(`Split into ${chunks.length} chunks`);
+
+//     // Step 3 — embed each chunk and save to MongoDB
+//     const filename = req.file.originalname;
+
+//     // Delete old chunks for this file first
+//     await Chunk.deleteMany({});
+
+//     // for (let i = 0; i < chunks.length; i++) {
+//     //   console.log(`Embedding chunk ${i + 1}/${chunks.length}...`);
+
+//     //   const embedding = await getEmbedding(chunks[i]);
+
+//     //   console.log(" Saving to MongoDB...");
+
+//     //   await Chunk.create({
+//     //     text: chunks[i],
+//     //     embedding,
+//     //     source: filename,
+//     //     chunkIndex: i,
+//     //   });
+
+//     //   console.log("Saved to MongoDB");
+//     // }
+//     console.log("Running embeddings in parallel...");
+
+//     const embeddings = await Promise.all(
+//       chunks.map((chunk, i) => {
+//         console.log(`Embedding chunk ${i + 1}/${chunks.length}`);
+//         return getEmbedding(chunk);
+//       }),
+//     );
+
+//     console.log("Saving all chunks to MongoDB...");
+
+//     await Promise.all(
+//       embeddings.map((embedding, i) => {
+//         return Chunk.create({
+//           text: chunks[i],
+//           embedding,
+//           source: filename,
+//           chunkIndex: i,
+//         });
+//       }),
+//     );
+
+//     console.log("All chunks saved");
+
+//     res.json({
+//       message: "PDF processed successfully!",
+//       filename,
+//       totalChunks: chunks.length,
+//     });
+//   } catch (error) {
+//     console.error("Upload error:", error);
+//     res.status(500).json({ error: error.message });
+//   }
+// });
 
 // ─── ROUTE 2: Ask a question ───────────────────────────────────────────────────
 app.post("/ask", async (req, res) => {
