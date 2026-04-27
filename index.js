@@ -7,7 +7,7 @@ console.log(typeof pdf);
 const fetch = require("node-fetch");
 const cors = require("cors");
 const Chunk = require("./models/Chunk");
-const { fromBuffer } = require('pdf2pic');
+const { fromBuffer } = require("pdf2pic");
 
 console.log("API KEY:", process.env.OPENROUTER_API_KEY ? "EXISTS" : "MISSING");
 console.log("MONGO URI:", process.env.MONGODB_URI ? "EXISTS" : "MISSING");
@@ -88,7 +88,7 @@ app.post("/upload", upload.single("pdf"), async (req, res) => {
 
     // Step 1 — convert PDF pages to base64 images
     const converter = fromBuffer(req.file.buffer, {
-      density: 150,           // DPI — higher = better quality but slower
+      density: 150, // DPI — higher = better quality but slower
       format: "png",
       width: 1200,
       height: 1600,
@@ -120,15 +120,17 @@ app.post("/upload", upload.single("pdf"), async (req, res) => {
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
-            model: "openai/gpt-4o",   // Vision model
+            model: "anthropic/claude-3-haiku", // Claude handles base64 better
             messages: [
               {
                 role: "user",
                 content: [
                   {
-                    type: "image_url",
-                    image_url: {
-                      url: `data:image/png;base64,${base64Image}`,
+                    type: "image",
+                    source: {
+                      type: "base64",
+                      media_type: "image/png",
+                      data: base64Image, // Claude format is different from OpenAI
                     },
                   },
                   {
@@ -143,7 +145,7 @@ Do not summarize or skip anything.`,
             ],
             max_tokens: 2000,
           }),
-        }
+        },
       );
 
       const visionData = await visionResponse.json();
@@ -175,7 +177,7 @@ Do not summarize or skip anything.`,
       chunks.map((chunk, i) => {
         console.log(`Embedding chunk ${i + 1}/${chunks.length}`);
         return getEmbedding(chunk);
-      })
+      }),
     );
 
     console.log("Saving all chunks to MongoDB...");
@@ -187,8 +189,8 @@ Do not summarize or skip anything.`,
           embedding,
           source: filename,
           chunkIndex: i,
-        })
-      )
+        }),
+      ),
     );
 
     console.log("All chunks saved!");
@@ -199,7 +201,6 @@ Do not summarize or skip anything.`,
       totalChunks: chunks.length,
       pages: pageCount,
     });
-
   } catch (error) {
     console.error("Upload error:", error);
     res.status(500).json({ error: error.message });
