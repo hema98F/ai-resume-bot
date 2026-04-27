@@ -223,10 +223,41 @@ app.post("/upload", upload.single("pdf"), async (req, res) => {
 app.post("/ask", async (req, res) => {
   const { question } = req.body;
 
-  if (!question) {
-    return res.status(400).json({ error: "Please send a question" });
-  }
-if (lowerQ.includes("name")) {
+if (!question) {
+  return res.status(400).json({ error: "Please send a question" });
+}
+
+// STEP 1: ROUTER
+const routerResponse = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+  method: "POST",
+  headers: {
+    Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
+    "Content-Type": "application/json",
+  },
+  body: JSON.stringify({
+    model: "openai/gpt-3.5-turbo",
+    messages: [
+      {
+        role: "user",
+        content: `
+Classify this question into ONE of these:
+- profile (name, skills, education, contact, projects)
+- rag (summary, explanation, experience)
+
+Return ONLY one word.
+
+Question: ${question}
+        `
+      }
+    ]
+  })
+});
+
+const routerData = await routerResponse.json();
+const route = routerData.choices[0].message.content.trim();
+
+// STEP 2: HANDLE PROFILE QUESTIONS
+if (route === "profile") {
   const chunks = await Chunk.find({});
   const fullText = chunks.map(c => c.text).join("\n");
 
@@ -241,21 +272,32 @@ if (lowerQ.includes("name")) {
       messages: [
         {
           role: "user",
-          content: `Extract ONLY the full name from this resume text.
-Return only the name, nothing else.
+          content: `
+Answer this question STRICTLY from the resume.
 
-TEXT:
-${fullText}`
+Question: ${question}
+
+Resume:
+${fullText}
+
+Rules:
+- Be direct
+- If answer exists → give it
+- If not → say "Not mentioned"
+`
         }
       ]
     })
   });
 
   const data = await response.json();
-  const name = data.choices[0].message.content.trim();
 
-  return res.json({ question, answer: name });
+  return res.json({
+    question,
+    answer: data.choices[0].message.content
+  });
 }
+
   try {
     // Step 1 — embed the question
     console.log("Embedding question...");
