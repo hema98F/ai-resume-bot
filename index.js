@@ -285,9 +285,12 @@ Resume:
 ${fullText}
 
 Rules:
-- Be direct
-- If answer exists → give it
-- If not → say "Not mentioned"
+- Extract directly
+- Do NOT say "not found" unless truly missing
+- Understand vague questions:
+  "degree" → education
+  "experience" → work experience
+  "role" → job title
 `,
             },
           ],
@@ -329,7 +332,7 @@ Rules:
       },
     ]);
 
-    const filteredChunks = relevantChunks.filter(c => c.score > 0.7);
+    const filteredChunks = relevantChunks.filter(c => c.score > 0.6);
 
     console.log(`Found ${relevantChunks.length} relevant chunks`);
     relevantChunks.forEach((c, i) => {
