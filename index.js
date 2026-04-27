@@ -276,8 +276,8 @@ Question: ${question}
           messages: [
             {
               role: "user",
-              content: `
-Answer this question STRICTLY from the resume.
+content: `
+Answer the question using resume information.
 
 Question: ${question}
 
@@ -285,12 +285,14 @@ Resume:
 ${fullText}
 
 Rules:
-- Extract directly
-- Do NOT say "not found" unless truly missing
+- Extract directly from resume
 - Understand vague questions:
   "degree" → education
   "experience" → work experience
   "role" → job title
+- If multiple answers exist, list them clearly
+- Be concise
+- DO NOT say "not found" unless absolutely missing
 `,
             },
           ],
@@ -412,7 +414,7 @@ Rules:
       question,
       answer,
       chunksUsed: relevantChunks.length,
-      sources: relevantChunks.map((c) => ({
+      sources: (filteredChunks.length > 0 ? filteredChunks : relevantChunks).map((c) => ({
         source: c.source,
         score: c.score?.toFixed(3),
         preview: c.text.substring(0, 100) + "...",
