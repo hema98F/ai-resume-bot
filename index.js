@@ -24,9 +24,9 @@ mongoose
 // Multer — store PDF in memory, not disk
 const upload = multer({ storage: multer.memoryStorage() });
 
-// ─── HELPER: Get embedding for any text ───────────────────────────────────────
+// ─── HELPER: Get embedding for any text
 async function getEmbedding(text) {
-  console.log("➡️ Calling embedding API...");
+  console.log("Calling embedding API...");
   const response = await fetch("https://openrouter.ai/api/v1/embeddings", {
     method: "POST",
     headers: {
@@ -41,20 +41,20 @@ async function getEmbedding(text) {
 
   const data = await response.json();
   console.log(
-    "⬅️ Embedding API response:",
+    "Embedding API response:",
     JSON.stringify(data).substring(0, 200),
   );
 
   // Guard against unexpected response
   if (!data.data || !data.data[0]) {
-    console.error("❌ Unexpected embedding response:", JSON.stringify(data));
+    console.error("Unexpected embedding response:", JSON.stringify(data));
     throw new Error(`Embedding API error: ${JSON.stringify(data)}`);
   }
 
   return data.data[0].embedding;
 }
 
-// ─── HELPER: Split text into chunks ───────────────────────────────────────────
+// HELPER: Split text into chunks
 function splitIntoChunks(text, chunkSize = 200) {
   const words = text.split(" ");
   const chunks = [];
@@ -75,14 +75,29 @@ function splitIntoChunks(text, chunkSize = 200) {
   return chunks;
 }
 
-// ─── ROUTE 1: Upload PDF ───────────────────────────────────────────────────────
+// ROUTE 1: Upload PDF
 app.post("/upload", upload.single("pdf"), async (req, res) => {
   try {
     console.log("PDF received, extracting text...");
 
     // Step 1 — extract text from PDF
     const pdfData = await pdf(req.file.buffer);
-    const fullText = pdfData.text;
+    let fullText = pdfData.text;
+
+    // Clean up broken text — fix spaced characters like "S k i l l s"
+    fullText = fullText
+      // Fix spaced letters: "S k i l l s" → "Skills"
+      .replace(/\b([A-Za-z])\s(?=[A-Za-z]\s|[A-Za-z]\b)/g, "$1")
+      // Fix multiple spaces → single space
+      .replace(/  +/g, " ")
+      // Fix multiple newlines → double newline
+      .replace(/\n{3,}/g, "\n\n")
+      // Remove weird special characters
+      .replace(/[^\x20-\x7E\n]/g, " ")
+      .trim();
+
+    console.log("CLEANED TEXT:", fullText.substring(0, 500));
+
     console.log(`Extracted ${fullText.length} characters`);
     console.log("FULL TEXT:", fullText);
 
@@ -101,7 +116,7 @@ app.post("/upload", upload.single("pdf"), async (req, res) => {
 
     //   const embedding = await getEmbedding(chunks[i]);
 
-    //   console.log("💾 Saving to MongoDB...");
+    //   console.log(" Saving to MongoDB...");
 
     //   await Chunk.create({
     //     text: chunks[i],
@@ -110,9 +125,9 @@ app.post("/upload", upload.single("pdf"), async (req, res) => {
     //     chunkIndex: i,
     //   });
 
-    //   console.log("✅ Saved to MongoDB");
+    //   console.log("Saved to MongoDB");
     // }
-    console.log("⚡ Running embeddings in parallel...");
+    console.log("Running embeddings in parallel...");
 
     const embeddings = await Promise.all(
       chunks.map((chunk, i) => {
@@ -121,7 +136,7 @@ app.post("/upload", upload.single("pdf"), async (req, res) => {
       }),
     );
 
-    console.log("💾 Saving all chunks to MongoDB...");
+    console.log("Saving all chunks to MongoDB...");
 
     await Promise.all(
       embeddings.map((embedding, i) => {
@@ -134,7 +149,7 @@ app.post("/upload", upload.single("pdf"), async (req, res) => {
       }),
     );
 
-    console.log("✅ All chunks saved");
+    console.log("All chunks saved");
 
     res.json({
       message: "PDF processed successfully!",
@@ -227,7 +242,7 @@ Rules:
 - Keep answer under 3 sentences unless listing items
 - Never repeat the context back verbatim`;
 
-    console.log("🧠 Calling LLM...");
+    console.log("Calling LLM...");
 
     // Step 4 — ask AI
     const response = await fetch(
@@ -245,7 +260,7 @@ Rules:
       },
     );
 
-    console.log("📥 LLM responded");
+    console.log("LLM responded");
 
     const data = await response.json();
     const answer = data.choices[0].message.content;
