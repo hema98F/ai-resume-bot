@@ -79,109 +79,36 @@ function splitIntoChunks(text, chunkSize = 200) {
 // ROUTE 1: Upload PDF
 app.post("/upload", upload.single("pdf"), async (req, res) => {
   try {
-    console.log("PDF received, converting to images...");
+    console.log("PDF received, extracting text...");
 
     const filename = req.file.originalname;
 
-    // Delete ALL old chunks
+    // Step 1 — extract text directly
+    const pdfData = await pdf(req.file.buffer);
+    let fullText = pdfData.text;
+
+    // Clean text
+    fullText = fullText
+      .replace(/\b([A-Za-z])\s(?=[A-Za-z]\s|[A-Za-z]\b)/g, "$1")
+      .replace(/  +/g, " ")
+      .replace(/\n{3,}/g, "\n\n")
+      .replace(/[^\x20-\x7E\n]/g, " ")
+      .trim();
+
+    console.log("Extracted:", fullText.length);
+
+    // Step 2 — chunk
+    const chunks = splitIntoChunks(fullText, 200);
+
+    // Step 3 — clear old data
     await Chunk.deleteMany({});
 
-    // Step 1 — convert PDF pages to base64 images
-    const converter = fromBuffer(req.file.buffer, {
-      density: 150, // DPI — higher = better quality but slower
-      format: "png",
-      width: 1200,
-      height: 1600,
-    });
-
-    // Get page count first
-    const pdfData = await pdf(req.file.buffer);
-    const pageCount = pdfData.numpages;
-    console.log(`PDF has ${pageCount} pages`);
-
-    // Convert each page to image
-    const pageTexts = [];
-
-    for (let page = 1; page <= pageCount; page++) {
-      console.log(`Converting page ${page}/${pageCount} to image...`);
-
-      const pageImage = await converter(page, { responseType: "base64" });
-      const base64Image = pageImage.base64;
-
-      console.log(`Sending page ${page} to AI Vision...`);
-
-      // Send image to AI Vision — GPT-4o can see images
-      const visionResponse = await fetch(
-        "https://openrouter.ai/api/v1/chat/completions",
-        {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            model: "anthropic/claude-3-haiku", // Claude handles base64 better
-            messages: [
-              {
-                role: "user",
-                content: [
-                  {
-                    type: "image",
-                    source: {
-                      type: "base64",
-                      media_type: "image/png",
-                      data: base64Image, // Claude format is different from OpenAI
-                    },
-                  },
-                  {
-                    type: "text",
-                    text: `Extract ALL text from this resume page exactly as it appears.
-Include names, contact info, skills, experience, education, everything.
-Preserve the structure but write it as plain text.
-Do not summarize or skip anything.`,
-                  },
-                ],
-              },
-            ],
-            max_tokens: 2000,
-          }),
-        },
-      );
-
-      const visionData = await visionResponse.json();
-
-      if (!visionData.choices?.[0]?.message?.content) {
-        console.error("Vision API error:", JSON.stringify(visionData));
-        throw new Error("Vision API failed: " + JSON.stringify(visionData));
-      }
-
-      const pageText = visionData.choices[0].message.content;
-      console.log(`Page ${page} extracted — ${pageText.length} characters`);
-      console.log("EXTRACTED TEXT:", pageText.substring(0, 300));
-
-      pageTexts.push(pageText);
-    }
-
-    // Combine all pages
-    const fullText = pageTexts.join("\n\n--- PAGE BREAK ---\n\n");
-    console.log(`Total extracted: ${fullText.length} characters`);
-
-    // Step 2 — chunk the text
-    const chunks = splitIntoChunks(fullText, 200);
-    console.log(`Split into ${chunks.length} chunks`);
-
-    // Step 3 — embed and save
-    console.log("Running embeddings in parallel...");
-
+    // Step 4 — embed
     const embeddings = await Promise.all(
-      chunks.map((chunk, i) => {
-        console.log(`Embedding chunk ${i + 1}/${chunks.length}`);
-        return getEmbedding(chunk);
-      }),
+      chunks.map((chunk) => getEmbedding(chunk))
     );
 
-    console.log("Saving all chunks to MongoDB...");
-
+    // Step 5 — save
     await Promise.all(
       embeddings.map((embedding, i) =>
         Chunk.create({
@@ -189,23 +116,18 @@ Do not summarize or skip anything.`,
           embedding,
           source: filename,
           chunkIndex: i,
-        }),
-      ),
+        })
+      )
     );
 
-    console.log("All chunks saved!");
-
-    // Wait for Atlas Vector Search index to sync
-    console.log("Waiting for index to sync...");
-    await new Promise((resolve) => setTimeout(resolve, 15000)); // 15 second wait
-    console.log("Index synced — ready!");
+    console.log("All chunks saved");
 
     res.json({
-      message: "PDF processed successfully with AI Vision!",
+      message: "PDF processed successfully!",
       filename,
       totalChunks: chunks.length,
-      pages: pageCount,
     });
+
   } catch (error) {
     console.error("Upload error:", error);
     res.status(500).json({ error: error.message });
