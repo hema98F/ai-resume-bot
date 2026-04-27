@@ -8,6 +8,9 @@ const fetch = require("node-fetch");
 const cors = require("cors");
 const Chunk = require("./models/Chunk");
 
+console.log("API KEY:", process.env.OPENROUTER_API_KEY ? "EXISTS" : "MISSING");
+console.log("MONGO URI:", process.env.MONGODB_URI ? "EXISTS" : "MISSING");
+
 const app = express();
 app.use(express.json());
 app.use(cors());
@@ -324,6 +327,11 @@ No explanation. No markdown. No code blocks. Just raw JSON.`,
     res.status(500).json({ error: error.message });
   }
 });
+
+app.get("/", (req, res) => {
+  res.send("Server is running");
+});
+
 
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => {
