@@ -40,7 +40,10 @@ async function getEmbedding(text) {
   });
 
   const data = await response.json();
-  console.log("⬅️ Embedding API response:", JSON.stringify(data).substring(0, 200));
+  console.log(
+    "⬅️ Embedding API response:",
+    JSON.stringify(data).substring(0, 200),
+  );
 
   // Guard against unexpected response
   if (!data.data || !data.data[0]) {
@@ -91,7 +94,7 @@ app.post("/upload", upload.single("pdf"), async (req, res) => {
     const filename = req.file.originalname;
 
     // Delete old chunks for this file first
-    await Chunk.deleteMany({ source: filename });
+    await Chunk.deleteMany({});
 
     // for (let i = 0; i < chunks.length; i++) {
     //   console.log(`Embedding chunk ${i + 1}/${chunks.length}...`);
@@ -331,7 +334,6 @@ No explanation. No markdown. No code blocks. Just raw JSON.`,
 app.get("/", (req, res) => {
   res.send("Server is running");
 });
-
 
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => {
