@@ -6,6 +6,7 @@ const chunkSchema = new mongoose.Schema(
     embedding: [Number], // vector — 1536 numbers representing meaning
     source: String, // filename — which PDF this came from
     chunkIndex: Number, // position in the document
+    userId: String
   },
   { timestamps: true },
 );

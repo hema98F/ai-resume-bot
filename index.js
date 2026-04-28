@@ -8,13 +8,19 @@ const fetch = require("node-fetch");
 const cors = require("cors");
 const Chunk = require("./models/Chunk");
 const { fromBuffer } = require("pdf2pic");
+const jwt = require("jsonwebtoken");
 
 console.log("API KEY:", process.env.OPENROUTER_API_KEY ? "EXISTS" : "MISSING");
 console.log("MONGO URI:", process.env.MONGODB_URI ? "EXISTS" : "MISSING");
 
 const app = express();
 app.use(express.json());
-app.use(cors());
+app.use(
+  cors({
+    origin: ["http://localhost:4200", "https://ai-chat-ui-blue.vercel.app"],
+    credentials: true,
+  }),
+);
 
 // Connect to MongoDB Atlas
 mongoose
@@ -36,7 +42,7 @@ async function getEmbedding(text) {
     },
     body: JSON.stringify({
       // model: "openai/text-embedding-ada-002",
-      model: "text-embedding-3-small",
+      model: "openai/text-embedding-ada-002",
       input: text,
     }),
   });
@@ -77,8 +83,29 @@ function splitIntoChunks(text, chunkSize = 200) {
   return chunks;
 }
 
+// ─── MIDDLEWARE: Verify JWT
+
+function authMiddleware(req, res, next) {
+  const authHeader = req.headers.authorization;
+
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    return res.status(401).json({ error: "Unauthorized - please login" });
+  }
+
+  const token = authHeader.split(" ")[1];
+
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    req.userId = decoded.userId;
+    req.userName = decoded.name;
+    next();
+  } catch (error) {
+    return res.status(401).json({ error: "Invalid or expired token" });
+  }
+}
+
 // ROUTE 1: Upload PDF
-app.post("/upload", upload.single("pdf"), async (req, res) => {
+app.post("/upload", authMiddleware, upload.single("pdf"), async (req, res) => {
   try {
     console.log("PDF received, extracting text...");
 
@@ -101,7 +128,7 @@ app.post("/upload", upload.single("pdf"), async (req, res) => {
     const chunks = splitIntoChunks(fullText, 100);
 
     // Step 3 — clear old data
-    await Chunk.deleteMany({});
+    await Chunk.deleteMany({ userId: req.userId });
 
     // Step 4 — embed
     const embeddings = await Promise.all(
@@ -116,6 +143,7 @@ app.post("/upload", upload.single("pdf"), async (req, res) => {
           embedding,
           source: filename,
           chunkIndex: i,
+          userId: req.userId,
         }),
       ),
     );
@@ -132,136 +160,44 @@ app.post("/upload", upload.single("pdf"), async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
-// app.post("/upload", upload.single("pdf"), async (req, res) => {
-//   try {
-//     console.log("PDF received, extracting text...");
 
-//     // Step 1 — extract text from PDF
-//     const pdfData = await pdf(req.file.buffer);
-//     let fullText = pdfData.text;
-
-//     // Clean up broken text — fix spaced characters like "S k i l l s"
-//     fullText = fullText
-//       // Fix spaced letters: "S k i l l s" → "Skills"
-//       .replace(/\b([A-Za-z])\s(?=[A-Za-z]\s|[A-Za-z]\b)/g, "$1")
-//       // Fix multiple spaces → single space
-//       .replace(/  +/g, " ")
-//       // Fix multiple newlines → double newline
-//       .replace(/\n{3,}/g, "\n\n")
-//       // Remove weird special characters
-//       .replace(/[^\x20-\x7E\n]/g, " ")
-//       .trim();
-
-//     console.log("CLEANED TEXT:", fullText.substring(0, 500));
-
-//     console.log(`Extracted ${fullText.length} characters`);
-//     console.log("FULL TEXT:", fullText);
-
-//     // Step 2 — split into chunks
-//     const chunks = splitIntoChunks(fullText, 200);
-//     console.log(`Split into ${chunks.length} chunks`);
-
-//     // Step 3 — embed each chunk and save to MongoDB
-//     const filename = req.file.originalname;
-
-//     // Delete old chunks for this file first
-//     await Chunk.deleteMany({});
-
-//     // for (let i = 0; i < chunks.length; i++) {
-//     //   console.log(`Embedding chunk ${i + 1}/${chunks.length}...`);
-
-//     //   const embedding = await getEmbedding(chunks[i]);
-
-//     //   console.log(" Saving to MongoDB...");
-
-//     //   await Chunk.create({
-//     //     text: chunks[i],
-//     //     embedding,
-//     //     source: filename,
-//     //     chunkIndex: i,
-//     //   });
-
-//     //   console.log("Saved to MongoDB");
-//     // }
-//     console.log("Running embeddings in parallel...");
-
-//     const embeddings = await Promise.all(
-//       chunks.map((chunk, i) => {
-//         console.log(`Embedding chunk ${i + 1}/${chunks.length}`);
-//         return getEmbedding(chunk);
-//       }),
-//     );
-
-//     console.log("Saving all chunks to MongoDB...");
-
-//     await Promise.all(
-//       embeddings.map((embedding, i) => {
-//         return Chunk.create({
-//           text: chunks[i],
-//           embedding,
-//           source: filename,
-//           chunkIndex: i,
-//         });
-//       }),
-//     );
-
-//     console.log("All chunks saved");
-
-//     res.json({
-//       message: "PDF processed successfully!",
-//       filename,
-//       totalChunks: chunks.length,
-//     });
-//   } catch (error) {
-//     console.error("Upload error:", error);
-//     res.status(500).json({ error: error.message });
-//   }
-// });
-
-// ─── ROUTE 2: Ask a question ───────────────────────────────────────────────────
-app.post("/ask", async (req, res) => {
+// ─── ROUTE 2: Ask a question
+app.post("/ask", authMiddleware, async (req, res) => {
   const { question } = req.body;
-
-  if (!question) {
+  if (!question)
     return res.status(400).json({ error: "Please send a question" });
-  }
 
-  // STEP 1: ROUTER
-  const routerResponse = await fetch(
-    "https://openrouter.ai/api/v1/chat/completions",
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
-        "Content-Type": "application/json",
+  try {
+    const questionEmbedding = await getEmbedding(question);
+
+    console.log("userId for search:", req.userId);
+    console.log("embedding length:", questionEmbedding.length);
+    const countCheck = await Chunk.countDocuments({ userId: req.userId });
+    console.log("chunks in DB for this user:", countCheck);
+    const relevantChunks = await Chunk.aggregate([
+      {
+        $vectorSearch: {
+          index: "vector_index",
+          path: "embedding",
+          queryVector: questionEmbedding,
+          numCandidates: 50,
+          limit: 5,
+          filter: { userId: { $eq: req.userId } },
+        },
       },
-      body: JSON.stringify({
-        model: "openai/gpt-3.5-turbo",
-        messages: [
-          {
-            role: "user",
-            content: `
-Classify this question into ONE of these:
-- profile (name, skills, education, contact, projects)
-- rag (summary, explanation, experience)
+      {
+        $project: { text: 1, source: 1, score: { $meta: "vectorSearchScore" } },
+      },
+    ]);
 
-Return ONLY one word.
+    if (relevantChunks.length === 0) {
+      return res.json({
+        answer:
+          "No relevant information found. Please upload your resume first.",
+      });
+    }
 
-Question: ${question}
-        `,
-          },
-        ],
-      }),
-    },
-  );
-
-  const routerData = await routerResponse.json();
-  const route = routerData.choices[0].message.content.trim();
-
-  // STEP 2: HANDLE PROFILE QUESTIONS
-  if (route === "profile") {
-    const chunks = await Chunk.find({});
-    const fullText = chunks.map((c) => c.text).join("\n");
+    const context = relevantChunks.map((c) => c.text).join("\n\n");
 
     const response = await fetch(
       "https://openrouter.ai/api/v1/chat/completions",
@@ -276,24 +212,15 @@ Question: ${question}
           messages: [
             {
               role: "user",
-content: `
-Answer the question using resume information.
+              content: `You are a resume assistant. Answer the question using ONLY the context below.
+The context is extracted from a resume — answer any question about the person's background.
 
-Question: ${question}
+CONTEXT:
+${context}
 
-Resume:
-${fullText}
+QUESTION: ${question}
 
-Rules:
-- Extract directly from resume
-- Understand vague questions:
-  "degree" → education
-  "experience" → work experience
-  "role" → job title
-- If multiple answers exist, list them clearly
-- Be concise
-- DO NOT say "not found" unless absolutely missing
-`,
+Be concise and direct.`,
             },
           ],
         }),
@@ -301,120 +228,10 @@ Rules:
     );
 
     const data = await response.json();
-
-    return res.json({
-      question,
-      answer: data.choices[0].message.content,
-    });
-  }
-
-  try {
-    // Step 1 — embed the question
-    console.log("Embedding question...");
-    const questionEmbedding = await getEmbedding(question);
-
-    // Step 2 — find similar chunks using Vector Search
-    console.log("Searching MongoDB Atlas...");
-    const relevantChunks = await Chunk.aggregate([
-      {
-        $vectorSearch: {
-          index: "vector_index",
-          path: "embedding",
-          queryVector: questionEmbedding,
-          numCandidates: 50,
-          limit: 5, // top most relevant chunks
-        },
-      },
-      {
-        $project: {
-          text: 1,
-          source: 1,
-          score: { $meta: "vectorSearchScore" },
-        },
-      },
-    ]);
-
-    const filteredChunks = relevantChunks.filter(c => c.score > 0.6);
-
-    console.log(`Found ${relevantChunks.length} relevant chunks`);
-    relevantChunks.forEach((c, i) => {
-      console.log(`Chunk ${i + 1} score: ${c.score?.toFixed(3)}`);
-    });
-
-    if (relevantChunks.length === 0) {
-      // TEMP DEBUG — fetch all chunks manually
-      console.log("Vector search returned 0 — fetching all chunks as fallback");
-      const allChunks = await Chunk.find({});
-      console.log(`Total chunks in DB: ${allChunks.length}`);
-      allChunks.forEach((c, i) =>
-        console.log(`DB Chunk ${i + 1}: ${c.text.substring(0, 80)}`),
-      );
-
-      return res.json({
-        answer:
-          "Vector search returned 0 results. Check terminal for debug info.",
-        debug: { totalChunksInDB: allChunks.length },
-      });
-    }
-
-    // Debug — see exactly what chunks are being sent to AI
-    relevantChunks.forEach((c, i) => {
-      console.log(`\nCHUNK ${i + 1} TEXT:\n${c.text}\n`);
-    });
-    // Step 3 — build prompt with chunks as context
-    const context = filteredChunks.length > 0
-  ? filteredChunks.map(c => c.text).join("\n\n")
-  : relevantChunks.map(c => c.text).join("\n\n");
-
-    const prompt = `You are a resume assistant.
-
-The context may contain formatting issues or merged words.
-Carefully interpret the meaning.
-
-Answer ONLY if clearly supported by context.
-Do NOT guess.
-
-If the answer is not in the context, say:
-"I don't find that information in the document."
-
-CONTEXT:
-${context}
-
-QUESTION: ${question}
-
-Rules:
-- Answer ONLY what was asked
-- Be concise
-- Do not include unrelated information`;
-
-    console.log("Calling LLM...");
-
-    // Step 4 — ask AI
-    const response = await fetch(
-      "https://openrouter.ai/api/v1/chat/completions",
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          model: "openai/gpt-3.5-turbo",
-          messages: [{ role: "user", content: prompt }],
-        }),
-      },
-    );
-
-    console.log("LLM responded");
-
-    const data = await response.json();
-    const answer = data.choices[0].message.content;
-
     res.json({
       question,
-      answer,
-      chunksUsed: relevantChunks.length,
-      sources: (filteredChunks.length > 0 ? filteredChunks : relevantChunks).map((c) => ({
+      answer: data.choices[0].message.content,
+      sources: relevantChunks.map((c) => ({
         source: c.source,
         score: c.score?.toFixed(3),
         preview: c.text.substring(0, 100) + "...",
@@ -425,13 +242,236 @@ Rules:
     res.status(500).json({ error: error.message });
   }
 });
+// app.post("/ask", authMiddleware, async (req, res) => {
+//   const { question } = req.body;
+
+//   if (!question) {
+//     return res.status(400).json({ error: "Please send a question" });
+//   }
+
+//   // STEP 1: ROUTER
+//   const routerResponse = await fetch(
+//     "https://openrouter.ai/api/v1/chat/completions",
+//     {
+//       method: "POST",
+//       headers: {
+//         Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
+//         "Content-Type": "application/json",
+//       },
+//       body: JSON.stringify({
+//         model: "openai/gpt-3.5-turbo",
+//         messages: [
+//           {
+//             role: "user",
+//             content: `
+// Classify this question into ONE of these:
+// - profile (name, skills, education, contact, projects)
+// - rag (summary, explanation, experience)
+
+// Return ONLY one word.
+
+// Question: ${question}
+//         `,
+//           },
+//         ],
+//       }),
+//     },
+//   );
+
+//   const routerData = await routerResponse.json();
+//   const route = routerData.choices[0].message.content.trim();
+
+//   // STEP 2: HANDLE PROFILE QUESTIONS
+//   if (route === "profile") {
+//     // const chunks = await Chunk.find({ userId: req.userId });
+//     // Get only the most recently uploaded file for this user
+//     const latestChunk = await Chunk.findOne({ userId: req.userId }).sort({
+//       createdAt: -1,
+//     });
+//     const chunks = latestChunk
+//       ? await Chunk.find({ userId: req.userId, source: latestChunk.source })
+//       : [];
+
+//     const fullText = chunks.map((c) => c.text).join("\n");
+
+//     const response = await fetch(
+//       "https://openrouter.ai/api/v1/chat/completions",
+//       {
+//         method: "POST",
+//         headers: {
+//           Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
+//           "Content-Type": "application/json",
+//         },
+//         body: JSON.stringify({
+//           model: "openai/gpt-3.5-turbo",
+//           messages: [
+//             {
+//               role: "user",
+//               content: `
+// Answer the question using resume information.
+
+// Question: ${question}
+
+// Resume:
+// ${fullText}
+
+// Rules:
+// - Extract directly from resume
+// - Understand vague questions:
+//   "degree" → education
+//   "experience" → work experience
+//   "role" → job title
+// - If multiple answers exist, list them clearly
+// - Be concise
+// - DO NOT say "not found" unless absolutely missing
+// `,
+//             },
+//           ],
+//         }),
+//       },
+//     );
+
+//     const data = await response.json();
+
+//     return res.json({
+//       question,
+//       answer: data.choices[0].message.content,
+//     });
+//   }
+
+//   try {
+//     // Step 1 — embed the question
+//     console.log("Embedding question...");
+//     const questionEmbedding = await getEmbedding(question);
+
+//     // Step 2 — find similar chunks using Vector Search
+//     console.log("Searching MongoDB Atlas...");
+//     const relevantChunks = await Chunk.aggregate([
+//       {
+//         $vectorSearch: {
+//           index: "vector_index",
+//           path: "embedding",
+//           queryVector: questionEmbedding,
+//           numCandidates: 50,
+//           limit: 10, // top most relevant chunks
+//           filter: { userId: { $eq: req.userId } }, // only this user's chunks
+//         },
+//       },
+//       {
+//         $project: {
+//           text: 1,
+//           source: 1,
+//           score: { $meta: "vectorSearchScore" },
+//         },
+//       },
+//       { $limit: 3 },
+//     ]);
+
+//     const filteredChunks = relevantChunks.filter((c) => c.score > 0.6);
+
+//     console.log(`Found ${relevantChunks.length} relevant chunks`);
+//     relevantChunks.forEach((c, i) => {
+//       console.log(`Chunk ${i + 1} score: ${c.score?.toFixed(3)}`);
+//     });
+
+//     if (relevantChunks.length === 0) {
+//       // TEMP DEBUG — fetch all chunks manually
+//       console.log("Vector search returned 0 — fetching all chunks as fallback");
+//       const allChunks = await Chunk.find({ userId: req.userId });
+//       console.log(`Total chunks in DB: ${allChunks.length}`);
+//       allChunks.forEach((c, i) =>
+//         console.log(`DB Chunk ${i + 1}: ${c.text.substring(0, 80)}`),
+//       );
+
+//       return res.json({
+//         answer:
+//           "Vector search returned 0 results. Check terminal for debug info.",
+//         debug: { totalChunksInDB: allChunks.length },
+//       });
+//     }
+
+//     // Debug — see exactly what chunks are being sent to AI
+//     relevantChunks.forEach((c, i) => {
+//       console.log(`\nCHUNK ${i + 1} TEXT:\n${c.text}\n`);
+//     });
+//     // Step 3 — build prompt with chunks as context
+//     const context =
+//       filteredChunks.length > 0
+//         ? filteredChunks.map((c) => c.text).join("\n\n")
+//         : relevantChunks.map((c) => c.text).join("\n\n");
+
+//     const prompt = `You are a resume assistant.
+
+// The context may contain formatting issues or merged words.
+// Carefully interpret the meaning.
+
+// Answer ONLY if clearly supported by context.
+// Do NOT guess.
+
+// If the answer is not in the context, say:
+// "I don't find that information in the document."
+
+// CONTEXT:
+// ${context}
+
+// QUESTION: ${question}
+
+// Rules:
+// - Answer ONLY what was asked
+// - Be concise
+// - Do not include unrelated information`;
+
+//     console.log("Calling LLM...");
+
+//     // Step 4 — ask AI
+//     const response = await fetch(
+//       "https://openrouter.ai/api/v1/chat/completions",
+//       {
+//         method: "POST",
+//         headers: {
+//           Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
+//           "Content-Type": "application/json",
+//         },
+//         body: JSON.stringify({
+//           model: "openai/gpt-3.5-turbo",
+//           messages: [{ role: "user", content: prompt }],
+//         }),
+//       },
+//     );
+
+//     console.log("LLM responded");
+
+//     const data = await response.json();
+//     const answer = data.choices[0].message.content;
+
+//     res.json({
+//       question,
+//       answer,
+//       chunksUsed: relevantChunks.length,
+//       sources: (filteredChunks.length > 0
+//         ? filteredChunks
+//         : relevantChunks
+//       ).map((c) => ({
+//         source: c.source,
+//         score: c.score?.toFixed(3),
+//         preview: c.text.substring(0, 100) + "...",
+//       })),
+//     });
+//   } catch (error) {
+//     console.error("Ask error:", error);
+//     res.status(500).json({ error: error.message });
+//   }
+// });
 
 // ─── ROUTE 3: Extract structured profile from resume
 
-app.post("/extract-profile", async (req, res) => {
+app.post("/extract-profile", authMiddleware, async (req, res) => {
   try {
     // Load all chunks from MongoDB for this resume
-    const chunks = await Chunk.find({});
+    const chunks = await Chunk.find({
+      source: req.body.filename,
+      userId: req.userId,
+    });
 
     if (chunks.length === 0) {
       return res.status(404).json({ error: "No resume found. Upload first." });
@@ -501,7 +541,11 @@ ${fullText}`,
 
     // Parse the JSON — this is why we told AI to return ONLY JSON
 
-    const profile = JSON.parse(rawText);
+    // const profile = JSON.parse(rawText);
+
+    // Clean control characters before parsing
+    const cleaned = rawText.replace(/[\x00-\x1F\x7F]/g, " ");
+    const profile = JSON.parse(cleaned);
 
     res.json({ profile });
   } catch (error) {
