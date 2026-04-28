@@ -15,20 +15,20 @@ console.log("MONGO URI:", process.env.MONGODB_URI ? "EXISTS" : "MISSING");
 
 const app = express();
 app.use(express.json());
-// app.use(
-//   cors({
-//     origin: ["http://localhost:4200", "https://ai-chat-ui-blue.vercel.app"],
-//     credentials: true,
-//   }),
-// );
+const corsOptions = {
+  origin: [
+    "http://localhost:4200",
+    "https://ai-chat-ui-blue.vercel.app"
+  ],
+  credentials: true,
+};
 
-app.use(
-  cors({
-    origin: true, // allow all origins (safe for now)
-    credentials: true,
-  })
-);
-app.options("*", cors());
+app.use(cors(corsOptions));
+
+// Handle preflight safely (NO "*")
+app.options("/upload", cors(corsOptions));
+app.options("/ask", cors(corsOptions));
+app.options("/extract-profile", cors(corsOptions));
 
 // Connect to MongoDB Atlas
 mongoose
