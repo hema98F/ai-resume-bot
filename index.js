@@ -17,18 +17,16 @@ console.log("API KEY:", process.env.OPENROUTER_API_KEY ? "EXISTS" : "MISSING");
 console.log("MONGO URI:", process.env.MONGODB_URI ? "EXISTS" : "MISSING");
 
 const app = express();
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 const corsOptions = {
   origin: ["http://localhost:4200", "https://ai-chat-ui-blue.vercel.app"],
   credentials: true,
   allowedHeaders: ["Content-Type", "Authorization"],
-  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
+  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
 };
 
 app.use(cors(corsOptions));
-
-// Handle preflight globally
-// app.options('*', cors(corsOptions));
-// app.options('/*', cors(corsOptions));
 
 // Connect to MongoDB Atlas
 mongoose
@@ -171,7 +169,15 @@ app.post("/upload", authMiddleware, upload.single("pdf"), async (req, res) => {
 
 // ─── ROUTE 2: Ask a question
 app.post("/ask", authMiddleware, async (req, res) => {
+
+   console.log("ASK BODY:", req.body);
+  // const { question } = req.body;
+  if (!req.body || !req.body.question) {
+    return res.status(400).json({ error: "Question is required" });
+  }
+
   const { question } = req.body;
+
   if (!question)
     return res.status(400).json({ error: "Please send a question" });
 
@@ -474,10 +480,17 @@ Be concise and direct.`,
 // ─── ROUTE 3: Extract structured profile from resume
 
 app.post("/extract-profile", authMiddleware, async (req, res) => {
+
+  console.log("EXTRACT BODY:", req.body);
   try {
-    // Load all chunks from MongoDB for this resume
+    if (!req.body || !req.body.filename) {
+      return res.status(400).json({ error: "Filename is required" });
+    }
+
+    const { filename } = req.body;
+
     const chunks = await Chunk.find({
-      source: req.body.filename,
+      source: filename,
       userId: req.userId,
     });
 
