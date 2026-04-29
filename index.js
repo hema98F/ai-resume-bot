@@ -1,5 +1,7 @@
 require("dotenv").config();
 console.log("JWT_SECRET:", process.env.JWT_SECRET);
+console.log("OPENROUTER:", process.env.OPENROUTER_API_KEY);
+console.log("MONGO:", process.env.MONGODB_URI);
 const express = require("express");
 const mongoose = require("mongoose");
 const multer = require("multer");
