@@ -25,7 +25,8 @@ const corsOptions = {
 app.use(cors(corsOptions));
 
 // Handle preflight globally
-app.options('*', cors(corsOptions));
+// app.options('*', cors(corsOptions));
+app.options('/*', cors(corsOptions));
 
 // Connect to MongoDB Atlas
 mongoose
